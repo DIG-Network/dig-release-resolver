@@ -1,0 +1,44 @@
+# dig-release-resolver — shared GitHub-release resolution for the DIG component fleet.
+#
+# Given a DIG component's `Repo` (owner/name/binary-stem) and the running host's `Target`
+# (OS/arch), this crate answers two questions every updater on the fleet needs answered
+# identically:
+#   1. "What is the latest published version, and what does its per-OS/arch release asset
+#      look like?" (the `repo`/`target`/`github` modules — a thin GitHub-Releases-API client).
+#   2. "Given what's installed and what's latest, should this run Install / Update / Skip?"
+#      (the `decision` module — a pure, dependency-free decision matrix).
+#
+# Factored out of `dig-installer` (issue #504/#508) so the DIG-Network/dig-updater auto-update
+# beacon consumes the EXACT SAME resolution logic dig-installer already shipped and tested,
+# rather than a second hand-rolled copy that could drift. dig-installer will re-export from this
+# crate in a follow-up release (release-first: this crate ships first).
+#
+# Deliberately dependency-light and free of any OTHER `DIG-Network` crate: `ureq` (rustls, no
+# system OpenSSL) for the GitHub API round trip, `serde`/`serde_json` for the release JSON shape.
+# No downloading, checksumming, or writing of the release binary itself — that stays with each
+# consumer (dig-installer's `download`/`asset` modules, the beacon's signed-manifest verifier),
+# since they verify against different trust roots. No `updates.dig.net` signed-feed client either
+# — that is the beacon's own concern (#513); this crate speaks the public GitHub Releases API only,
+# and doubles as the documented fallback source when the signed feed is unreachable.
+[package]
+name = "dig-release-resolver"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75.0"
+license = "GPL-2.0-only"
+description = "Resolve the latest/by-tag/prerelease GitHub release + per-OS-arch asset name for a DIG component, and decide Install/Update/Skip against what's installed. Shared by dig-installer and the dig-updater auto-update beacon."
+authors = ["DIG Network"]
+repository = "https://github.com/DIG-Network/dig-release-resolver"
+readme = "README.md"
+keywords = ["dig", "release", "updater", "github"]
+categories = ["network-programming"]
+
+[dependencies]
+# Blocking HTTP with rustls (no system OpenSSL) — matches the rustls-only posture of
+# dig-installer/digstore/dig-node, so a consumer never links two TLS stacks.
+ureq = { version = "2", default-features = false, features = ["tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+overflow-checks = true
