@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Format / Clippy / Test / Docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cargo-nextest
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Check clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # cargo-nextest for the regular test run: faster + `.config/nextest.toml` retries flaky tests
+      # up to 2x and reports them (ecosystem flaky-test-management standard #489), surfacing flake
+      # instead of masking it as a straight failure.
+      - name: Run tests (nextest, flaky-retry)
+        run: cargo nextest run --all
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Check documentation
+        run: cargo doc --no-deps
+
+  coverage:
+    name: Coverage (>=80% lines)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cargo-nextest
+
+      # This crate ships its full unit suite from the first commit — no scaffold-phase exclusions
+      # needed. The decision core (decision.rs) and the URL/parsing logic (repo.rs, github.rs,
+      # target.rs) are all real, implemented logic; the >=80% gate applies to the whole crate.
+      #
+      # COMBINED FORM (flaky-test-management #489): `cargo llvm-cov nextest` drives nextest itself
+      # (retries per `.config/nextest.toml`) so coverage is still collected under the nextest
+      # runner — running `cargo nextest run` and `cargo llvm-cov` as two SEPARATE steps collects
+      # zero coverage and fails this gate.
+      - name: Run tests with coverage (nextest, gate >=80% lines)
+        run: >-
+          cargo llvm-cov nextest --all
+          --fail-under-lines 80
+          --lcov --output-path lcov.info
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-coverage
+          path: lcov.info
+          if-no-files-found: error
