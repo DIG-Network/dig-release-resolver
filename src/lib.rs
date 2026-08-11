@@ -17,6 +17,10 @@
 //! - **Decision** ([`decision`]) — a pure function, [`decision::decide`], that takes what was
 //!   [`decision::detect_installed_version`] at the destination plus the string
 //!   [`github::latest_version`] resolved, and returns an [`decision::UpdateDecision`].
+//! - **Loadability** ([`loadability`]) — will a resolved artifact actually LOAD on this host? Reads
+//!   the ELF's own dynamic-linking requirements out of its bytes (never executing it) and returns a
+//!   three-valued [`loadability::Loadability`]. Shared so the install-time and update-time selectors
+//!   reach the byte-identical decision — a host never oscillates between loadable and unloadable.
 //!
 //! ```no_run
 //! use dig_release_resolver::{decision, github, repo, target};
@@ -40,6 +44,7 @@
 
 pub mod decision;
 pub mod github;
+pub mod loadability;
 pub mod repo;
 pub mod target;
 
@@ -48,5 +53,9 @@ pub use decision::{
     UpdateDecision,
 };
 pub use github::{latest_release, latest_tag, latest_version, release_by_tag, Release};
+pub use loadability::{
+    decide_loadability, expand_runpath, host_checker, inspect_artifact, parse_elf_needs, ElfNeeds,
+    Host, Loadability, LoadabilityCheck, SonameResolver,
+};
 pub use repo::{tag_from_input, version_from_tag, Repo};
 pub use target::{Arch, Os, Target};
