@@ -32,6 +32,10 @@ println!("{}", decision.summary); // e.g. "v0.14.0 → v0.15.0 (update)"
   (with the `/releases/latest` → releases-list prerelease fallback), `release_by_tag`.
 - **`decision`** — the pure Install/Update/Skip decision matrix (`decide`/`decide_with_force`) plus
   the one I/O boundary that detects what's on disk (`detect_installed_version`).
+- **`loadability`** — will a resolved artifact actually LOAD on this host? Reads the ELF's own
+  dynamic-linking requirements out of its bytes (never executing it) and returns a three-valued,
+  deliberately asymmetric `Loadability` (`host_checker`/`inspect_artifact`/`decide_loadability`), so
+  the install-time and update-time selectors reach the byte-identical verdict.
 
 See [`SPEC.md`](./SPEC.md) for the full normative contract.
 

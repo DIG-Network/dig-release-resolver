@@ -1,13 +1,14 @@
 # dig-release-resolver — Release Resolution Specification
 
-**Status:** Normative · **Crate:** `dig-release-resolver` · **API version:** `0.1`
+**Status:** Normative · **Crate:** `dig-release-resolver` · **API version:** `0.2`
 
 This document is the authoritative contract for `dig-release-resolver`: given a DIG component's
 release coordinates and the running host's platform, how to resolve the latest (or a named)
-release, name its per-OS/arch asset, and decide whether an install run should install, update, or
-skip. An independent implementation built from this document alone MUST resolve the same URLs,
-the same asset names, and the same Install/Update/Skip decision as the reference crate for the
-same inputs.
+release, name its per-OS/arch asset, decide whether an install run should install, update, or
+skip, and decide whether a resolved artifact can actually LOAD on this host. An independent
+implementation built from this document alone MUST resolve the same URLs, the same asset names,
+the same Install/Update/Skip decision, and the same three-valued loadability verdict as the
+reference crate for the same inputs.
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are to be interpreted as in RFC 2119.
 
@@ -24,6 +25,8 @@ auto-update beacon (a scheduled daemon, issue #504) never diverge on what "the l
    component, and what does its release asset for THIS host look like? (§2–§4)
 2. **Decision** — given what is already installed and what is latest, should this run **Install**,
    **Update**, or **Skip**? (§5)
+3. **Loadability** — will a resolved artifact's bytes actually LOAD on this host, or would it die in
+   the dynamic linker before `main` despite a perfect signature and digest? (§6)
 
 ### 1.1 What this crate is NOT
 
@@ -261,7 +264,63 @@ string (clap's default formatter prints `"<name> <version>"`, e.g. `"dig-node 0.
 
 ---
 
-## 6 · Conformance
+## 6 · Host loadability — the `loadability` module
+
+A signature and a digest prove an artifact is the intended BYTES; they say nothing about whether
+those bytes can start on THIS host. A `linux/x64` build linked against GTK sonames a headless
+server lacks installs perfectly and then dies inside the dynamic linker before `main`; an `arm64`
+build dropped into the `linux/x64` slot dies at `execve` with `Exec format error` while every
+soname it names still resolves. The `loadability` module answers this question so that the
+install-time selector (`dig-installer`) and the update-time selector (`dig-updater`'s beacon)
+reach the **byte-identical** verdict — a host MUST never oscillate between calling a build loadable
+and calling it unloadable depending on which selector looked.
+
+### 6.1 The verdict is three-valued (`Loadability`)
+
+- `Loadable` — every demand the image makes of the loader is satisfiable here; permit.
+- `Unloadable { missing }` — the image needs shared libraries or a program interpreter this host
+  does not provide; refuse, naming what is missing in the image's own order.
+- `WrongMachine { artifact, host }` — the image's `e_machine` is not the host's; refuse.
+- `Indeterminate { why }` — no answer could be established; **permit**.
+
+### 6.2 The decision is deliberately asymmetric
+
+A verdict MUST refuse ONLY when it can PROVE the host cannot load the artifact. A non-ELF artifact
+(`.deb`/`.msi`/`.pkg`), an unparseable or truncated image, a host whose shared-library set cannot
+be established, an architecture this crate does not name, and any non-Linux host all yield
+`Indeterminate`, which permits. Refusing what cannot be proven would freeze every native-package
+and musl host forever — including security updates and the updater's own update — so the check may
+only ever make a selector do LESS, never more, and runs strictly AFTER signature + digest
+verification.
+
+### 6.3 The verdict is read from bytes, never by executing the artifact
+
+Loadability MUST be answered by PARSING the artifact's bytes ([`parse_elf_needs`] →
+[`decide_loadability`] / [`inspect_artifact`]) — the candidate is NEVER spawned. The component that
+most needs the check parses no arguments and, run under a root beacon, would seal a master seed and
+bind a signing socket; executing a candidate "to see if it runs" is itself the harm. The only
+subprocess the module MAY spawn is the host's own `ldconfig -p`, and only to READ the linker cache.
+
+- `ldconfig` MUST be invoked at a trusted ABSOLUTE path (`/usr/sbin/ldconfig`, `/sbin/ldconfig`,
+  `/usr/bin/ldconfig`, `/bin/ldconfig`), never a bare name resolved through `$PATH`, with a cleared
+  environment, an output cap, and a deadline after which it is killed and reaped.
+- Three demands are checked, because each kills the process before `main` and each looks perfect to
+  a digest: the machine (`e_machine`), the program interpreter (`PT_INTERP`, by absolute path), and
+  the `DT_NEEDED` sonames (each resolved against the host set OR the image's own `$ORIGIN`-expanded
+  `DT_RUNPATH`/`DT_RPATH`).
+
+### 6.4 An enumerated host set is trusted to REFUSE only when COMPLETE
+
+A host shared-library set MUST NOT be used to refuse an artifact unless it is anchored by a C
+library (`libc.so*`, `libc-*`, `ld-musl-*`). A set without one was scanned in the wrong place (a
+multiarch triplet not searched), not "found wanting"; refusing against it would name every real
+library missing and freeze the fleet. The multiarch directories scanned are DERIVED from the
+filesystem and scoped to the host's own architecture — another architecture's flavour of a soname
+MUST NOT count as resolvable, since that would be a false `Loadable`.
+
+---
+
+## 7 · Conformance
 
 An implementation conforms iff, for the same `Repo`/`Target`/tag/version inputs, it:
 
@@ -273,6 +332,9 @@ An implementation conforms iff, for the same `Repo`/`Target`/tag/version inputs,
    without falling back (§3.1).
 4. Reaches the identical cell of the §5.2 decision matrix for the same `(detected, latest)` pair,
    including the never-downgrade and unparseable-reinstall rules.
+5. Returns the identical §6.1 loadability verdict for the same artifact bytes and host facts,
+   honouring the §6.2 asymmetry (refuse only what is proven), the §6.3 never-execute rule, and the
+   §6.4 completeness anchor.
 
 This crate does not define a numeric versioning scheme beyond §5.3 — conformance is purely about
 matching the STATED rules above, not reproducing internal representations.
